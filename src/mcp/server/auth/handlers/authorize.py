@@ -33,7 +33,7 @@ class AuthorizationRequest(BaseModel):
     state: str | None = Field(None, description="Optional state parameter")
     scope: str | None = Field(
         None,
-        description="Optional scope; if specified, should be " "a space-separated list of scope strings",
+        description="Optional scope; if specified, should be a space-separated list of scope strings",
     )
     resource: str | None = Field(
         None,
@@ -99,7 +99,7 @@ class AuthorizationHandler:
             if client is None and attempt_load_client:
                 # make last-ditch attempt to load the client
                 client_id = best_effort_extract_string("client_id", params)
-                client = client_id and await self.provider.get_client(client_id)
+                client = await self.provider.get_client(client_id) if client_id else None
             if redirect_uri is None and client:
                 # make last-ditch effort to load the redirect uri
                 try:
