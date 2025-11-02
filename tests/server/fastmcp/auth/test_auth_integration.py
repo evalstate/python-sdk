@@ -39,11 +39,13 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         return self.clients.get(client_id)
 
     async def register_client(self, client_info: OAuthClientInformationFull):
+        assert client_info.client_id is not None
         self.clients[client_info.client_id] = client_info
 
     async def authorize(self, client: OAuthClientInformationFull, params: AuthorizationParams) -> str:
         # toy authorize implementation which just immediately generates an authorization
         # code and completes the redirect
+        assert client.client_id is not None
         code = AuthorizationCode(
             code=f"code_{int(time.time())}",
             client_id=client.client_id,
@@ -72,6 +74,7 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         refresh_token = f"refresh_{secrets.token_hex(32)}"
 
         # Store the tokens
+        assert client.client_id is not None
         self.tokens[access_token] = AccessToken(
             token=access_token,
             client_id=client.client_id,
@@ -133,6 +136,7 @@ class MockOAuthProvider(OAuthAuthorizationServerProvider[AuthorizationCode, Refr
         new_refresh_token = f"refresh_{secrets.token_hex(32)}"
 
         # Store the new tokens
+        assert client.client_id is not None
         self.tokens[new_access_token] = AccessToken(
             token=new_access_token,
             client_id=client.client_id,
@@ -936,6 +940,23 @@ class TestAuthEndpoints:
         assert "error" in error_data
         assert error_data["error"] == "invalid_client_metadata"
         assert error_data["error_description"] == "grant_types must be authorization_code and refresh_token"
+
+    @pytest.mark.anyio
+    async def test_client_registration_with_additional_grant_type(self, test_client: httpx.AsyncClient):
+        client_metadata = {
+            "redirect_uris": ["https://client.example.com/callback"],
+            "client_name": "Test Client",
+            "grant_types": ["authorization_code", "refresh_token", "urn:ietf:params:oauth:grant-type:device_code"],
+        }
+
+        response = await test_client.post("/register", json=client_metadata)
+        assert response.status_code == 201
+        client_info = response.json()
+
+        # Verify client was registered successfully
+        assert "client_id" in client_info
+        assert "client_secret" in client_info
+        assert client_info["client_name"] == "Test Client"
 
     @pytest.mark.anyio
     async def test_client_registration_with_additional_response_types(
