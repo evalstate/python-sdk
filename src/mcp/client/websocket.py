@@ -1,5 +1,4 @@
 import json
-import logging
 from collections.abc import AsyncGenerator
 from contextlib import asynccontextmanager
 
@@ -9,10 +8,8 @@ from pydantic import ValidationError
 from websockets.asyncio.client import connect as ws_connect
 from websockets.typing import Subprotocol
 
-import mcp.types as types
+from mcp import types
 from mcp.shared.message import SessionMessage
-
-logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
@@ -22,15 +19,14 @@ async def websocket_client(
     tuple[MemoryObjectReceiveStream[SessionMessage | Exception], MemoryObjectSendStream[SessionMessage]],
     None,
 ]:
-    """
-    WebSocket client transport for MCP, symmetrical to the server version.
+    """WebSocket client transport for MCP, symmetrical to the server version.
 
     Connects to 'url' using the 'mcp' subprotocol, then yields:
         (read_stream, write_stream)
 
     - read_stream: As you read from this stream, you'll receive either valid
-      JSONRPCMessage objects or Exception objects (when validation fails).
-    - write_stream: Write JSONRPCMessage objects to this stream to send them
+      SessionMessage objects or Exception objects (when validation fails).
+    - write_stream: Write SessionMessage objects to this stream to send them
       over the WebSocket to the server.
     """
 
@@ -49,29 +45,27 @@ async def websocket_client(
     async with ws_connect(url, subprotocols=[Subprotocol("mcp")]) as ws:
 
         async def ws_reader():
-            """
-            Reads text messages from the WebSocket, parses them as JSON-RPC messages,
+            """Reads text messages from the WebSocket, parses them as JSON-RPC messages,
             and sends them into read_stream_writer.
             """
             async with read_stream_writer:
                 async for raw_text in ws:
                     try:
-                        message = types.JSONRPCMessage.model_validate_json(raw_text)
+                        message = types.jsonrpc_message_adapter.validate_json(raw_text, by_name=False)
                         session_message = SessionMessage(message)
                         await read_stream_writer.send(session_message)
-                    except ValidationError as exc:
+                    except ValidationError as exc:  # pragma: no cover
                         # If JSON parse or model validation fails, send the exception
                         await read_stream_writer.send(exc)
 
         async def ws_writer():
-            """
-            Reads JSON-RPC messages from write_stream_reader and
+            """Reads JSON-RPC messages from write_stream_reader and
             sends them to the server.
             """
             async with write_stream_reader:
                 async for session_message in write_stream_reader:
                     # Convert to a dict, then to JSON
-                    msg_dict = session_message.message.model_dump(by_alias=True, mode="json", exclude_none=True)
+                    msg_dict = session_message.message.model_dump(by_alias=True, mode="json", exclude_unset=True)
                     await ws.send(json.dumps(msg_dict))
 
         async with anyio.create_task_group() as tg:

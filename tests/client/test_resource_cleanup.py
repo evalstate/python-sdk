@@ -3,6 +3,7 @@ from unittest.mock import patch
 
 import anyio
 import pytest
+from pydantic import TypeAdapter
 
 from mcp.shared.message import SessionMessage
 from mcp.shared.session import BaseSession, RequestId, SendResultT
@@ -11,31 +12,35 @@ from mcp.types import ClientNotification, ClientRequest, ClientResult, EmptyResu
 
 @pytest.mark.anyio
 async def test_send_request_stream_cleanup():
-    """
-    Test that send_request properly cleans up streams when an exception occurs.
+    """Test that send_request properly cleans up streams when an exception occurs.
 
     This test mocks out most of the session functionality to focus on stream cleanup.
     """
 
     # Create a mock session with the minimal required functionality
     class TestSession(BaseSession[ClientRequest, ClientNotification, ClientResult, Any, Any]):
-        async def _send_response(self, request_id: RequestId, response: SendResultT | ErrorData) -> None:
+        async def _send_response(
+            self, request_id: RequestId, response: SendResultT | ErrorData
+        ) -> None:  # pragma: no cover
             pass
+
+        @property
+        def _receive_request_adapter(self) -> TypeAdapter[Any]:
+            return TypeAdapter(object)  # pragma: no cover
+
+        @property
+        def _receive_notification_adapter(self) -> TypeAdapter[Any]:
+            return TypeAdapter(object)  # pragma: no cover
 
     # Create streams
     write_stream_send, write_stream_receive = anyio.create_memory_object_stream[SessionMessage](1)
     read_stream_send, read_stream_receive = anyio.create_memory_object_stream[SessionMessage](1)
 
     # Create the session
-    session = TestSession(
-        read_stream_receive,
-        write_stream_send,
-        object,  # Request type doesn't matter for this test
-        object,  # Notification type doesn't matter for this test
-    )
+    session = TestSession(read_stream_receive, write_stream_send)
 
     # Create a test request
-    request = ClientRequest(PingRequest())
+    request = PingRequest()
 
     # Patch the _write_stream.send method to raise an exception
     async def mock_send(*args: Any, **kwargs: Any):

@@ -2,7 +2,8 @@ import logging
 from dataclasses import dataclass
 from typing import Any, Literal
 
-from pydantic import AnyUrl, BaseModel, Field, RootModel, ValidationError
+# TODO(Marcelo): We should drop the `RootModel`.
+from pydantic import AnyUrl, BaseModel, Field, RootModel, ValidationError  # noqa: TID251
 from starlette.datastructures import FormData, QueryParams
 from starlette.requests import Request
 from starlette.responses import RedirectResponse, Response
@@ -50,7 +51,7 @@ class AuthorizationErrorResponse(BaseModel):
 
 
 def best_effort_extract_string(key: str, params: None | FormData | QueryParams) -> str | None:
-    if params is None:
+    if params is None:  # pragma: no cover
         return None
     value = params.get(key)
     if isinstance(value, str):
@@ -116,7 +117,7 @@ class AuthorizationHandler:
                     pass
 
             # the error response MUST contain the state specified by the client, if any
-            if state is None:
+            if state is None:  # pragma: no cover
                 # make last-ditch effort to load state
                 state = best_effort_extract_string("state", params)
 
@@ -218,7 +219,7 @@ class AuthorizationHandler:
                 # Handle authorization errors as defined in RFC 6749 Section 4.1.2.1
                 return await error_response(error=e.error, error_description=e.error_description)
 
-        except Exception as validation_error:
+        except Exception as validation_error:  # pragma: no cover
             # Catch-all for unexpected errors
             logger.exception("Unexpected error in authorization_handler", exc_info=validation_error)
             return await error_response(error="server_error", error_description="An unexpected error occurred")

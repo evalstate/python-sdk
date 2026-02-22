@@ -1,12 +1,12 @@
 import contextlib
 import logging
 from collections.abc import AsyncIterator
-from typing import Any
 
 import anyio
 import click
-import mcp.types as types
-from mcp.server.lowlevel import Server
+import uvicorn
+from mcp import types
+from mcp.server import Server, ServerRequestContext
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
 from starlette.applications import Starlette
 from starlette.middleware.cors import CORSMiddleware
@@ -16,64 +16,15 @@ from starlette.types import Receive, Scope, Send
 logger = logging.getLogger(__name__)
 
 
-@click.command()
-@click.option("--port", default=3000, help="Port to listen on for HTTP")
-@click.option(
-    "--log-level",
-    default="INFO",
-    help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
-)
-@click.option(
-    "--json-response",
-    is_flag=True,
-    default=False,
-    help="Enable JSON responses instead of SSE streams",
-)
-def main(
-    port: int,
-    log_level: str,
-    json_response: bool,
-) -> int:
-    # Configure logging
-    logging.basicConfig(
-        level=getattr(logging, log_level.upper()),
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-    )
-
-    app = Server("mcp-streamable-http-stateless-demo")
-
-    @app.call_tool()
-    async def call_tool(name: str, arguments: dict[str, Any]) -> list[types.ContentBlock]:
-        ctx = app.request_context
-        interval = arguments.get("interval", 1.0)
-        count = arguments.get("count", 5)
-        caller = arguments.get("caller", "unknown")
-
-        # Send the specified number of notifications with the given interval
-        for i in range(count):
-            await ctx.session.send_log_message(
-                level="info",
-                data=f"Notification {i + 1}/{count} from caller: {caller}",
-                logger="notification_stream",
-                related_request_id=ctx.request_id,
-            )
-            if i < count - 1:  # Don't wait after the last notification
-                await anyio.sleep(interval)
-
-        return [
-            types.TextContent(
-                type="text",
-                text=(f"Sent {count} notifications with {interval}s interval for caller: {caller}"),
-            )
-        ]
-
-    @app.list_tools()
-    async def list_tools() -> list[types.Tool]:
-        return [
+async def handle_list_tools(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListToolsResult:
+    return types.ListToolsResult(
+        tools=[
             types.Tool(
                 name="start-notification-stream",
                 description=("Sends a stream of notifications with configurable count and interval"),
-                inputSchema={
+                input_schema={
                     "type": "object",
                     "required": ["interval", "count", "caller"],
                     "properties": {
@@ -93,6 +44,65 @@ def main(
                 },
             )
         ]
+    )
+
+
+async def handle_call_tool(ctx: ServerRequestContext, params: types.CallToolRequestParams) -> types.CallToolResult:
+    arguments = params.arguments or {}
+    interval = arguments.get("interval", 1.0)
+    count = arguments.get("count", 5)
+    caller = arguments.get("caller", "unknown")
+
+    # Send the specified number of notifications with the given interval
+    for i in range(count):
+        await ctx.session.send_log_message(
+            level="info",
+            data=f"Notification {i + 1}/{count} from caller: {caller}",
+            logger="notification_stream",
+            related_request_id=ctx.request_id,
+        )
+        if i < count - 1:  # Don't wait after the last notification
+            await anyio.sleep(interval)
+
+    return types.CallToolResult(
+        content=[
+            types.TextContent(
+                type="text",
+                text=(f"Sent {count} notifications with {interval}s interval for caller: {caller}"),
+            )
+        ]
+    )
+
+
+@click.command()
+@click.option("--port", default=3000, help="Port to listen on for HTTP")
+@click.option(
+    "--log-level",
+    default="INFO",
+    help="Logging level (DEBUG, INFO, WARNING, ERROR, CRITICAL)",
+)
+@click.option(
+    "--json-response",
+    is_flag=True,
+    default=False,
+    help="Enable JSON responses instead of SSE streams",
+)
+def main(
+    port: int,
+    log_level: str,
+    json_response: bool,
+) -> None:
+    # Configure logging
+    logging.basicConfig(
+        level=getattr(logging, log_level.upper()),
+        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    )
+
+    app = Server(
+        "mcp-streamable-http-stateless-demo",
+        on_list_tools=handle_list_tools,
+        on_call_tool=handle_call_tool,
+    )
 
     # Create the session manager with true stateless mode
     session_manager = StreamableHTTPSessionManager(
@@ -118,9 +128,7 @@ def main(
     # Create an ASGI application using the transport
     starlette_app = Starlette(
         debug=True,
-        routes=[
-            Mount("/mcp", app=handle_streamable_http),
-        ],
+        routes=[Mount("/mcp", app=handle_streamable_http)],
         lifespan=lifespan,
     )
 
@@ -133,8 +141,4 @@ def main(
         expose_headers=["Mcp-Session-Id"],
     )
 
-    import uvicorn
-
     uvicorn.run(starlette_app, host="127.0.0.1", port=port)
-
-    return 0

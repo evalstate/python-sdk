@@ -1,16 +1,20 @@
 """Tests for StreamableHTTPSessionManager."""
 
+import json
 from typing import Any
 from unittest.mock import AsyncMock, patch
 
 import anyio
+import httpx
 import pytest
 from starlette.types import Message
 
-from mcp.server import streamable_http_manager
-from mcp.server.lowlevel import Server
+from mcp import Client
+from mcp.client.streamable_http import streamable_http_client
+from mcp.server import Server, ServerRequestContext, streamable_http_manager
 from mcp.server.streamable_http import MCP_SESSION_ID_HEADER, StreamableHTTPServerTransport
 from mcp.server.streamable_http_manager import StreamableHTTPSessionManager
+from mcp.types import INVALID_REQUEST, ListToolsResult, PaginatedRequestParams
 
 
 @pytest.mark.anyio
@@ -26,7 +30,7 @@ async def test_run_can_only_be_called_once():
     # Second call should raise RuntimeError
     with pytest.raises(RuntimeError) as excinfo:
         async with manager.run():
-            pass
+            pass  # pragma: no cover
 
     assert "StreamableHTTPSessionManager .run() can only be called once per instance" in str(excinfo.value)
 
@@ -66,10 +70,10 @@ async def test_handle_request_without_run_raises_error():
     # Mock ASGI parameters
     scope = {"type": "http", "method": "POST", "path": "/test"}
 
-    async def receive():
+    async def receive():  # pragma: no cover
         return {"type": "http.request", "body": b""}
 
-    async def send(message: Message):
+    async def send(message: Message):  # pragma: no cover
         pass
 
     # Should raise error because run() hasn't been called
@@ -114,7 +118,7 @@ async def test_stateful_session_cleanup_on_graceful_exit(running_manager: tuple[
         "headers": [(b"content-type", b"application/json")],
     }
 
-    async def mock_receive():
+    async def mock_receive():  # pragma: no cover
         return {"type": "http.request", "body": b"", "more_body": False}
 
     # Trigger session creation
@@ -122,13 +126,13 @@ async def test_stateful_session_cleanup_on_graceful_exit(running_manager: tuple[
 
     # Extract session ID from response headers
     session_id = None
-    for msg in sent_messages:
-        if msg["type"] == "http.response.start":
-            for header_name, header_value in msg.get("headers", []):
+    for msg in sent_messages:  # pragma: no branch
+        if msg["type"] == "http.response.start":  # pragma: no branch
+            for header_name, header_value in msg.get("headers", []):  # pragma: no branch
                 if header_name.decode().lower() == MCP_SESSION_ID_HEADER.lower():
                     session_id = header_value.decode()
                     break
-            if session_id:  # Break outer loop if session_id is found
+            if session_id:  # Break outer loop if session_id is found  # pragma: no branch
                 break
 
     assert session_id is not None, "Session ID not found in response headers"
@@ -163,7 +167,7 @@ async def test_stateful_session_cleanup_on_exception(running_manager: tuple[Stre
         # If an exception occurs, the transport might try to send an error response
         # For this test, we mostly care that the session is established enough
         # to get an ID
-        if message["type"] == "http.response.start" and message["status"] >= 500:
+        if message["type"] == "http.response.start" and message["status"] >= 500:  # pragma: no cover
             pass  # Expected if TestException propagates that far up the transport
 
     scope = {
@@ -173,20 +177,20 @@ async def test_stateful_session_cleanup_on_exception(running_manager: tuple[Stre
         "headers": [(b"content-type", b"application/json")],
     }
 
-    async def mock_receive():
+    async def mock_receive():  # pragma: no cover
         return {"type": "http.request", "body": b"", "more_body": False}
 
     # Trigger session creation
     await manager.handle_request(scope, mock_receive, mock_send)
 
     session_id = None
-    for msg in sent_messages:
-        if msg["type"] == "http.response.start":
-            for header_name, header_value in msg.get("headers", []):
+    for msg in sent_messages:  # pragma: no branch
+        if msg["type"] == "http.response.start":  # pragma: no branch
+            for header_name, header_value in msg.get("headers", []):  # pragma: no branch
                 if header_name.decode().lower() == MCP_SESSION_ID_HEADER.lower():
                     session_id = header_value.decode()
                     break
-            if session_id:  # Break outer loop if session_id is found
+            if session_id:  # Break outer loop if session_id is found  # pragma: no branch
                 break
 
     assert session_id is not None, "Session ID not found in response headers"
@@ -213,7 +217,7 @@ async def test_stateless_requests_memory_cleanup():
 
     # Patch StreamableHTTPServerTransport constructor to track instances
 
-    original_constructor = streamable_http_manager.StreamableHTTPServerTransport
+    original_constructor = StreamableHTTPServerTransport
 
     def track_transport(*args: Any, **kwargs: Any) -> StreamableHTTPServerTransport:
         transport = original_constructor(*args, **kwargs)
@@ -262,3 +266,147 @@ async def test_stateless_requests_memory_cleanup():
 
             # Verify internal state is cleaned up
             assert len(transport._request_streams) == 0, "Transport should have no active request streams"
+
+
+@pytest.mark.anyio
+async def test_unknown_session_id_returns_404():
+    """Test that requests with unknown session IDs return HTTP 404 per MCP spec."""
+    app = Server("test-unknown-session")
+    manager = StreamableHTTPSessionManager(app=app)
+
+    async with manager.run():
+        sent_messages: list[Message] = []
+        response_body = b""
+
+        async def mock_send(message: Message):
+            nonlocal response_body
+            sent_messages.append(message)
+            if message["type"] == "http.response.body":
+                response_body += message.get("body", b"")
+
+        # Request with a non-existent session ID
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"accept", b"application/json, text/event-stream"),
+                (b"mcp-session-id", b"non-existent-session-id"),
+            ],
+        }
+
+        async def mock_receive():
+            return {"type": "http.request", "body": b"{}", "more_body": False}  # pragma: no cover
+
+        await manager.handle_request(scope, mock_receive, mock_send)
+
+        # Find the response start message
+        response_start = next(
+            (msg for msg in sent_messages if msg["type"] == "http.response.start"),
+            None,
+        )
+        assert response_start is not None, "Should have sent a response"
+        assert response_start["status"] == 404, "Should return HTTP 404 for unknown session ID"
+
+        # Verify JSON-RPC error format
+        error_data = json.loads(response_body)
+        assert error_data["jsonrpc"] == "2.0"
+        assert error_data["id"] is None
+        assert error_data["error"]["code"] == INVALID_REQUEST
+        assert error_data["error"]["message"] == "Session not found"
+
+
+@pytest.mark.anyio
+async def test_e2e_streamable_http_server_cleanup():
+    host = "testserver"
+
+    async def handle_list_tools(ctx: ServerRequestContext, params: PaginatedRequestParams | None) -> ListToolsResult:
+        return ListToolsResult(tools=[])
+
+    app = Server("test-server", on_list_tools=handle_list_tools)
+    mcp_app = app.streamable_http_app(host=host)
+    async with (
+        mcp_app.router.lifespan_context(mcp_app),
+        httpx.ASGITransport(mcp_app) as transport,
+        httpx.AsyncClient(transport=transport) as http_client,
+        Client(streamable_http_client(f"http://{host}/mcp", http_client=http_client)) as client,
+    ):
+        await client.list_tools()
+
+
+@pytest.mark.anyio
+async def test_idle_session_is_reaped():
+    """After idle timeout fires, the session returns 404."""
+    app = Server("test-idle-reap")
+    manager = StreamableHTTPSessionManager(app=app, session_idle_timeout=0.05)
+
+    async with manager.run():
+        sent_messages: list[Message] = []
+
+        async def mock_send(message: Message):
+            sent_messages.append(message)
+
+        scope = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [(b"content-type", b"application/json")],
+        }
+
+        async def mock_receive():  # pragma: no cover
+            return {"type": "http.request", "body": b"", "more_body": False}
+
+        await manager.handle_request(scope, mock_receive, mock_send)
+
+        session_id = None
+        for msg in sent_messages:  # pragma: no branch
+            if msg["type"] == "http.response.start":  # pragma: no branch
+                for header_name, header_value in msg.get("headers", []):  # pragma: no branch
+                    if header_name.decode().lower() == MCP_SESSION_ID_HEADER.lower():
+                        session_id = header_value.decode()
+                        break
+                if session_id:  # pragma: no branch
+                    break
+
+        assert session_id is not None, "Session ID not found in response headers"
+
+        # Wait for the 50ms idle timeout to fire and cleanup to complete
+        await anyio.sleep(0.1)
+
+        # Verify via public API: old session ID now returns 404
+        response_messages: list[Message] = []
+
+        async def capture_send(message: Message):
+            response_messages.append(message)
+
+        scope_with_session = {
+            "type": "http",
+            "method": "POST",
+            "path": "/mcp",
+            "headers": [
+                (b"content-type", b"application/json"),
+                (b"mcp-session-id", session_id.encode()),
+            ],
+        }
+
+        await manager.handle_request(scope_with_session, mock_receive, capture_send)
+
+        response_start = next(
+            (msg for msg in response_messages if msg["type"] == "http.response.start"),
+            None,
+        )
+        assert response_start is not None
+        assert response_start["status"] == 404
+
+
+def test_session_idle_timeout_rejects_non_positive():
+    with pytest.raises(ValueError, match="positive number"):
+        StreamableHTTPSessionManager(app=Server("test"), session_idle_timeout=-1)
+    with pytest.raises(ValueError, match="positive number"):
+        StreamableHTTPSessionManager(app=Server("test"), session_idle_timeout=0)
+
+
+def test_session_idle_timeout_rejects_stateless():
+    with pytest.raises(RuntimeError, match="not supported in stateless"):
+        StreamableHTTPSessionManager(app=Server("test"), session_idle_timeout=30, stateless=True)

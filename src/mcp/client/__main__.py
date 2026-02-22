@@ -1,13 +1,14 @@
 import argparse
 import logging
 import sys
+import warnings
 from functools import partial
 from urllib.parse import urlparse
 
 import anyio
 from anyio.streams.memory import MemoryObjectReceiveStream, MemoryObjectSendStream
 
-import mcp.types as types
+from mcp import types
 from mcp.client.session import ClientSession
 from mcp.client.sse import sse_client
 from mcp.client.stdio import StdioServerParameters, stdio_client
@@ -15,8 +16,6 @@ from mcp.shared.message import SessionMessage
 from mcp.shared.session import RequestResponder
 
 if not sys.warnoptions:
-    import warnings
-
     warnings.simplefilter("ignore")
 
 logging.basicConfig(level=logging.INFO)

@@ -1,9 +1,9 @@
+from urllib.parse import urlparse
+
 import anyio
 import click
-import mcp.types as types
-from mcp.server.lowlevel import Server
-from mcp.server.lowlevel.helper_types import ReadResourceContents
-from pydantic import AnyUrl, FileUrl
+from mcp import types
+from mcp.server import Server, ServerRequestContext
 from starlette.requests import Request
 
 SAMPLE_RESOURCES = {
@@ -22,6 +22,45 @@ SAMPLE_RESOURCES = {
 }
 
 
+async def handle_list_resources(
+    ctx: ServerRequestContext, params: types.PaginatedRequestParams | None
+) -> types.ListResourcesResult:
+    return types.ListResourcesResult(
+        resources=[
+            types.Resource(
+                uri=f"file:///{name}.txt",
+                name=name,
+                title=SAMPLE_RESOURCES[name]["title"],
+                description=f"A sample text resource named {name}",
+                mime_type="text/plain",
+            )
+            for name in SAMPLE_RESOURCES.keys()
+        ]
+    )
+
+
+async def handle_read_resource(
+    ctx: ServerRequestContext, params: types.ReadResourceRequestParams
+) -> types.ReadResourceResult:
+    parsed = urlparse(str(params.uri))
+    if not parsed.path:
+        raise ValueError(f"Invalid resource path: {params.uri}")
+    name = parsed.path.replace(".txt", "").lstrip("/")
+
+    if name not in SAMPLE_RESOURCES:
+        raise ValueError(f"Unknown resource: {params.uri}")
+
+    return types.ReadResourceResult(
+        contents=[
+            types.TextResourceContents(
+                uri=str(params.uri),
+                text=SAMPLE_RESOURCES[name]["content"],
+                mime_type="text/plain",
+            )
+        ]
+    )
+
+
 @click.command()
 @click.option("--port", default=8000, help="Port to listen on for SSE")
 @click.option(
@@ -31,31 +70,11 @@ SAMPLE_RESOURCES = {
     help="Transport type",
 )
 def main(port: int, transport: str) -> int:
-    app = Server("mcp-simple-resource")
-
-    @app.list_resources()
-    async def list_resources() -> list[types.Resource]:
-        return [
-            types.Resource(
-                uri=FileUrl(f"file:///{name}.txt"),
-                name=name,
-                title=SAMPLE_RESOURCES[name]["title"],
-                description=f"A sample text resource named {name}",
-                mimeType="text/plain",
-            )
-            for name in SAMPLE_RESOURCES.keys()
-        ]
-
-    @app.read_resource()
-    async def read_resource(uri: AnyUrl):
-        if uri.path is None:
-            raise ValueError(f"Invalid resource path: {uri}")
-        name = uri.path.replace(".txt", "").lstrip("/")
-
-        if name not in SAMPLE_RESOURCES:
-            raise ValueError(f"Unknown resource: {uri}")
-
-        return [ReadResourceContents(content=SAMPLE_RESOURCES[name]["content"], mime_type="text/plain")]
+    app = Server(
+        "mcp-simple-resource",
+        on_list_resources=handle_list_resources,
+        on_read_resource=handle_read_resource,
+    )
 
     if transport == "sse":
         from mcp.server.sse import SseServerTransport

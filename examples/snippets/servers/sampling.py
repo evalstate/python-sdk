@@ -1,8 +1,8 @@
-from mcp.server.fastmcp import Context, FastMCP
+from mcp.server.mcpserver import Context, MCPServer
 from mcp.server.session import ServerSession
 from mcp.types import SamplingMessage, TextContent
 
-mcp = FastMCP(name="Sampling Example")
+mcp = MCPServer(name="Sampling Example")
 
 
 @mcp.tool()
@@ -20,6 +20,7 @@ async def generate_poem(topic: str, ctx: Context[ServerSession, None]) -> str:
         max_tokens=100,
     )
 
+    # Since we're not passing tools param, result.content is single content
     if result.content.type == "text":
         return result.content.text
     return str(result.content)

@@ -1,21 +1,16 @@
-"""
-Run from the repository root:
-    uv run examples/snippets/clients/streamable_basic.py
+"""Run from the repository root:
+uv run examples/snippets/clients/streamable_basic.py
 """
 
 import asyncio
 
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
 
 
 async def main():
     # Connect to a streamable HTTP server
-    async with streamablehttp_client("http://localhost:8000/mcp") as (
-        read_stream,
-        write_stream,
-        _,
-    ):
+    async with streamable_http_client("http://localhost:8000/mcp") as (read_stream, write_stream):
         # Create a session using the client streams
         async with ClientSession(read_stream, write_stream) as session:
             # Initialize the connection
